@@ -1,0 +1,20 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# editors
+.vscode/
+.idea/
+*.swp
+
+# python (for the verification scripts we may add)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# secrets — never commit these
+.env
+*.key

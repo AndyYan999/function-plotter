@@ -1,0 +1,1817 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Function Plotter</title>
+<style>
+  :root{
+    --bg:#070a12;
+    --panel:#0e1524;
+    --line:#22304a;
+    --text:#dae3f4;
+    --muted:#78889f;
+    --accent:#57a6ff;
+    --accent-dim:#1d2c45;
+    --good:#4ade80;
+    --bad:#ff6b6b;
+    --warn:#fbbf24;
+    --ease:cubic-bezier(.4,0,.2,1);
+    --dur:.3s;
+  }
+  @media (prefers-reduced-motion: reduce){
+    *{ transition-duration:.01ms !important; animation-duration:.01ms !important; }
+  }
+  *{ box-sizing:border-box; }
+  html,body{ height:100%; margin:0; }
+  body{
+    background:var(--bg); color:var(--text);
+    font:12.5px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    overflow:hidden;
+    -webkit-user-select:none; user-select:none;
+    display:grid; grid-template-columns: var(--side-w, 352px) 1fr;
+    transition: grid-template-columns var(--dur) var(--ease);
+  }
+  body.side-collapsed{ --side-w: 0px; }
+
+  /* ---------- sidebar ---------- */
+  #side{
+    background:var(--panel); border-right:1px solid var(--line);
+    display:flex; flex-direction:column; min-height:0; overflow:hidden;
+    transition: opacity .24s ease;
+  }
+  body.side-collapsed #side{ opacity:0; pointer-events:none; }
+
+  /* A vertical tab that sticks out from the panel edge: panel-coloured body,
+     blue chevron. Sits flush against the sidebar so it reads as part of it. */
+  #sideToggle{
+    position:fixed;
+    top:50%; transform:translateY(-50%);
+    left:max(0px, calc(var(--side-w, 352px) - 1px));
+    width:19px; height:58px;
+    padding:0;
+    display:flex; align-items:center; justify-content:center;
+    background:var(--panel);
+    border:1px solid var(--line); border-left:0;
+    border-radius:0 7px 7px 0;
+    color:var(--accent);
+    font-size:11px; line-height:1;
+    z-index:30;
+    transition: left var(--dur) var(--ease),
+                background-color .22s ease, color .22s ease,
+                border-color .22s ease, box-shadow .22s ease;
+  }
+  #sideToggle:hover{
+    color:#fff; background:var(--accent-dim); border-color:var(--accent);
+    box-shadow:2px 0 12px rgba(87,166,255,.18);
+  }
+  #sideToggle .arrow{ display:inline-block; transition:transform var(--dur) var(--ease); }
+  body.side-collapsed #sideToggle .arrow{ transform:rotate(180deg); }
+  .sect{ padding:10px 12px; border-bottom:1px solid var(--line); }
+  .sect > h2{
+    margin:0 0 8px; font-size:10.5px; font-weight:400;
+    letter-spacing:.1em; color:var(--muted);
+    display:flex; align-items:center; justify-content:space-between; gap:8px;
+    cursor:pointer; user-select:none;
+  }
+  .sect > h2:hover{ color:var(--text); }
+  .sect > h2 .chev{ font-size:9px; transition:transform .16s ease; }
+  .sect.collapsed > h2{ margin-bottom:0; }
+  .sect.collapsed > h2 .chev{ transform:rotate(-90deg); }
+
+  /* Collapse by animating the grid row track 1fr -> 0fr. Nothing ever gets
+     display:none, so the section can actually animate; the inner wrapper
+     slides up toward the heading and fades as it goes. */
+  .sectbody{
+    display:grid; grid-template-rows:1fr;
+    transition: grid-template-rows var(--dur) var(--ease);
+  }
+  .sectbody > .sectinner{
+    overflow:hidden; min-height:0;
+    transition: opacity .26s ease, transform var(--dur) var(--ease);
+  }
+  .sect.collapsed > .sectbody{ grid-template-rows:0fr; }
+  .sect.collapsed > .sectbody > .sectinner{ opacity:0; transform:translateY(-16px); }
+
+  #sectHelp{ flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
+  #sectHelp.collapsed{ flex:0 0 auto; }
+  #sectHelp > .sectbody{ flex:1; min-height:0; }
+  #sectHelp > .sectbody > .sectinner{ display:flex; flex-direction:column; height:100%; }
+
+  /* ---------- LaTeX-style math typesetting ---------- */
+  .fnfield{ flex:1; min-width:0; display:flex; align-items:center; }
+  .fnfield > .expr{ flex:1; }
+  .fnfield > .m-math{ display:none; }
+  .fnfield.view > .expr{ display:none; }
+  .fnfield.view > .m-math{ display:flex; }
+
+  .m-math{
+    font-family:"Latin Modern Math","STIX Two Math","Cambria Math",
+                "Times New Roman",Times,serif;
+    font-size:15.5px; line-height:1.3; color:var(--text);
+    align-items:center; flex-wrap:wrap;
+    min-height:27px; padding:2px 7px; cursor:text;
+    border:1px solid transparent; border-radius:5px;
+    -webkit-user-select:none; user-select:none;
+  }
+  .m-math:hover{ border-color:var(--line); background:#0a0f1a; }
+  .m-row{ display:inline-flex; align-items:center; }
+  .m-var{ font-style:italic; }
+  .m-const{ font-style:italic; }
+  .m-fn{ font-style:normal; padding-right:1.5px; }
+  .m-op{ padding:0 3px; }
+  .m-num{ font-style:normal; }
+  .m-paren{ font-style:normal; }
+
+  .m-frac{
+    display:inline-flex; flex-direction:column; align-items:center;
+    vertical-align:middle; margin:0 3px; line-height:1.12;
+  }
+  .m-frac > .m-fnum{ border-bottom:1px solid currentColor; padding:0 5px; }
+  .m-frac > .m-fden{ padding:1px 5px 0; }
+  .m-frac.m-small{ font-size:.78em; }
+
+  .m-sqrt{ display:inline-flex; align-items:flex-start; }
+  .m-radical{ font-style:normal; }
+  .m-radicand{
+    display:inline-block; border-top:1px solid currentColor;
+    padding:1px 3px 0 2px; margin-left:-1px;
+  }
+
+  .m-sup{ font-size:.72em; vertical-align:super; line-height:0; position:relative; top:-.35em; }
+
+  #fnList{ display:flex; flex-direction:column; gap:7px; overflow-y:auto; max-height:40vh; }
+  #fnList::-webkit-scrollbar{ width:8px; }
+  #fnList::-webkit-scrollbar-thumb{ background:var(--line); border-radius:4px; }
+
+  .fnrow{
+    display:flex; flex-direction:column; gap:3px;
+    transition: opacity .34s var(--ease);
+  }
+  .fnrow.off{ opacity:.4; }
+  .fntop{ display:flex; align-items:center; gap:6px; }
+  .fnrow input[type=color]{
+    -webkit-appearance:none; appearance:none; border:0; padding:0;
+    width:20px; height:20px; flex:0 0 20px; border-radius:5px;
+    background:none; cursor:pointer;
+  }
+  .fnrow input[type=color]::-webkit-color-swatch-wrapper{ padding:0; }
+  .fnrow input[type=color]::-webkit-color-swatch{ border:1px solid rgba(255,255,255,.25); border-radius:5px; }
+
+  .fnrow select.lbl{
+    -webkit-appearance:none; appearance:none;
+    font:inherit; font-size:11px; color:var(--accent); text-align:center;
+    background:#0a0f1a; border:1px solid var(--line); border-radius:5px;
+    padding:4px 2px; cursor:pointer; flex:0 0 auto;
+    transition: border-color .2s ease, background-color .2s ease;
+  }
+  .fnrow select.lbl:hover{ border-color:rgba(87,166,255,.5); }
+  .fnrow select.lbl:focus{ outline:none; border-color:var(--accent); }
+
+  .fnrow input.expr{
+    flex:1; min-width:0; font:inherit; color:var(--text); background:#0a0f1a;
+    border:1px solid var(--line); border-radius:5px; padding:5px 7px;
+    transition: border-color .25s ease, box-shadow .25s ease, background-color .2s ease;
+  }
+  .fnrow input.expr:focus{ outline:none; border-color:var(--accent);
+                           box-shadow:0 0 0 3px rgba(87,166,255,.10); }
+  /* a half-typed expression is a warning, not a blocker — keep it calm */
+  .fnrow input.expr.warn{ border-color:rgba(251,191,36,.55); }
+  .fnrow.off input.expr{ color:var(--muted); text-decoration:line-through; }
+
+  .tick{
+    -webkit-appearance:none; appearance:none; border:1px solid var(--line);
+    width:16px; height:16px; flex:0 0 16px; border-radius:4px;
+    background:#0a0f1a; cursor:pointer; position:relative;
+    transition: background-color .24s ease, border-color .24s ease,
+                transform .16s var(--ease);
+  }
+  .tick:hover{ border-color:var(--accent); }
+  .tick:active{ transform:scale(.86); }
+  .tick:checked{ background:var(--accent-dim); border-color:var(--accent); }
+  .tick:checked::after{
+    content:''; position:absolute; left:4px; top:1px; width:4px; height:8px;
+    border:solid var(--accent); border-width:0 1.8px 1.8px 0; transform:rotate(43deg);
+    transition: border-color .24s ease;
+  }
+  .del{
+    border:0; background:none; color:var(--muted); padding:0 4px;
+    font-size:15px; line-height:1; cursor:pointer; border-radius:4px;
+    transition: color .22s ease, background-color .22s ease, transform .16s var(--ease);
+  }
+  .del:hover{ color:var(--bad); background:rgba(255,107,107,.12); }
+  .del:active{ transform:scale(.86); }
+  .fnerr{ font-size:10.5px; color:var(--warn); padding-left:26px; min-height:0; }
+  .fnerr:empty{ display:none; }
+
+  .btns{ display:flex; gap:6px; margin-top:9px; flex-wrap:wrap; }
+  button.b{
+    font:inherit; color:var(--text); background:#141d30;
+    border:1px solid var(--line); border-radius:6px; padding:6px 11px; cursor:pointer;
+    transition: background-color .22s ease, border-color .22s ease,
+                color .22s ease, box-shadow .22s ease, transform .12s var(--ease);
+  }
+  button.b:hover{
+    border-color:var(--accent); color:#fff; background:#1b2740;
+    box-shadow:0 0 0 3px rgba(87,166,255,.10);
+  }
+  button.b:active{ transform:translateY(1px); }
+  button.b.primary{ background:var(--accent-dim); border-color:var(--accent); color:#fff; }
+  button.b.primary:hover{ background:#28466a; }
+  #status{ margin-top:7px; font-size:10.5px; color:var(--muted); min-height:14px;
+           transition:color .25s ease; }
+
+  /* ---------- option rows ---------- */
+  .opt{
+    display:flex; align-items:center; gap:8px; padding:4px 0;
+    font-size:12px; cursor:pointer; border-radius:5px;
+    transition: background-color .2s ease, color .2s ease;
+  }
+  .opt:hover{ background:rgba(87,166,255,.07); }
+  .opt input{ margin:0; transition:transform .18s var(--ease); }
+  .opt:active input{ transform:scale(.88); }
+  .opt span{ color:var(--text); transition:color .2s ease; }
+  .opt:hover span{ color:#fff; }
+  .slider{ display:flex; align-items:center; gap:8px; padding:6px 0 2px; font-size:12px; }
+  .slider input[type=range]{ flex:1; min-width:0; accent-color:var(--accent); }
+  .slider .v{ color:var(--muted); width:34px; text-align:right; transition:color .2s ease; }
+
+  #help{
+    padding:10px 12px; font-size:10.5px; color:var(--muted);
+    line-height:1.65; overflow-y:auto; flex:1; min-height:0;
+  }
+  #help b{ color:var(--text); font-weight:400; }
+  #help code{ color:var(--accent); }
+
+  /* ---------- canvas ---------- */
+  #stage{ position:relative; min-width:0; }
+  #c{ display:block; cursor:crosshair; touch-action:none; }
+
+  #hud{
+    position:absolute; right:10px; bottom:10px;
+    color:var(--muted); font-size:11px; pointer-events:none; text-align:right;
+  }
+</style>
+</head>
+<body>
+
+<div id="side">
+  <section class="sect" id="sectExpr">
+    <h2 class="hdr" data-body="bodyExpr">EXPRESSIONS <span class="chev">&#9660;</span></h2>
+    <div class="sectbody" id="bodyExpr">
+     <div class="sectinner" id="innerExpr">
+      <div id="fnList"></div>
+      <div class="btns">
+        <button class="b" id="add">+ Add</button>
+        <button class="b primary" id="run">Run &#9654;</button>
+        <button class="b" id="retrace">Re-trace all</button>
+      </div>
+      <div id="status"></div>
+     </div>
+    </div>
+  </section>
+
+  <section class="sect" id="sectDisp">
+    <h2 class="hdr" data-body="bodyDisp">DISPLAY <span class="chev">&#9660;</span></h2>
+    <div class="sectbody" id="bodyDisp">
+     <div class="sectinner" id="innerDisp">
+      <label class="opt"><input type="checkbox" id="optAxes" checked><span>Show axes</span></label>
+      <label class="opt"><input type="checkbox" id="optGrid" checked><span>Show grid</span></label>
+      <label class="opt"><input type="checkbox" id="optLabels" checked><span>Show tick numbers</span></label>
+      <label class="opt"><input type="checkbox" id="optReadout"><span>Hover readout (x, y values)</span></label>
+      <label class="opt"><input type="checkbox" id="optTip" checked><span>Trace tip marker</span></label>
+      <div class="slider">
+        <span style="color:var(--muted)">trace speed</span>
+        <input type="range" id="optSpeed" min="0.25" max="4" step="0.25" value="1" />
+        <span class="v" id="optSpeedV">1&times;</span>
+      </div>
+      <div class="btns">
+        <button class="b" id="reset">Reset view</button>
+        <button class="b" id="clearAll">Clear all</button>
+      </div>
+     </div>
+    </div>
+  </section>
+
+  <section class="sect" id="sectHelp">
+    <h2 class="hdr" data-body="bodyHelp">SYNTAX &amp; CONTROLS <span class="chev">&#9660;</span></h2>
+    <div class="sectbody" id="bodyHelp">
+     <div class="sectinner" id="innerHelp">
+      <div id="help">
+        <b>Basics</b><br>
+        powers <code>x^2</code> &middot; implicit multiply <code>2x</code>, <code>3sin(x)</code><br>
+        <code>+ - * / ^</code> &middot; parens &middot; <code>|x|</code> absolute value<br>
+        factorial <code>5!</code> &middot; <code>x!</code><br>
+        constants <code>pi</code> <code>&pi;</code> <code>e</code> <code>tau</code><br><br>
+
+        <b>Trig</b><br>
+        <code>sin cos tan sec csc cot</code><br>
+        inverse <code>asin acos atan asec acsc acot</code><br>
+        <span style="opacity:.72">asin/acos exist only on &minus;1&hellip;1<br>
+        atan spans &minus;&pi;/2&hellip;&pi;/2 &middot; acos returns 0&hellip;&pi;<br>
+        plotting outside a domain just leaves a gap<br>
+        poles leave a gap too &mdash; <code>tan(x)</code> and <code>x^(-1/3)</code><br>
+        break rather than joining with a vertical line</span><br><br>
+
+        <b>Hyperbolic</b><br>
+        <code>sinh cosh tanh sech csch coth</code><br>
+        inverse <code>asinh acosh atanh</code><br>
+        <span style="opacity:.72">acosh needs x&ge;1, atanh needs &minus;1&lt;x&lt;1</span><br><br>
+
+        <b>Exponentials &amp; logs</b><br>
+        <code>exp exp2 ln log log2 logb(b,x)</code><br>
+        <span style="opacity:.72">ln = natural, log = base 10</span><br><br>
+
+        <b>Roots &amp; powers</b><br>
+        <code>sqrt cbrt nthroot(n,x) pow(a,b)</code><br>
+        <code>hypot(a,b)</code><br>
+        <span style="opacity:.72">negative bases work for fractional powers when the<br>
+        exponent has an odd denominator: <code>x^(2/3)</code> plots for x&nbsp;&lt;&nbsp;0,<br>
+        <code>x^(1/2)</code> does not (no real root)</span><br><br>
+
+        <b>Rounding &amp; step-like</b><br>
+        <code>floor ceil round trunc frac sign</code><br>
+        <code>mod(a,b) min(a,b) max(a,b) clamp(x,lo,hi) lerp(a,b,t)</code><br>
+        <span style="opacity:.72">frac(x) = x &minus; floor(x) &mdash; try <code>frac(x)</code> for a sawtooth</span><br><br>
+
+        <b>Special</b><br>
+        <code>gamma(x) fact(x) erf(x) sinc(x)</code><br>
+        <code>nCr(n,r) nPr(n,r) atan2(y,x)</code><br><br>
+
+        <b>Calculus</b><br>
+        <code>deriv(f)</code> <code>deriv2(f)</code> <code>deriv3(f)</code><br>
+        <span style="opacity:.72">Differentiated <em>symbolically</em>, so it's exact.
+        Try <code>deriv(x^3)</code> &rarr; 3x&sup2;, or <code>deriv(sin(x))</code> &rarr; cos(x)</span><br><br>
+
+        <b>Controls</b><br>
+        drag to pan &middot; scroll or pinch to zoom &middot; <code>0</code> resets<br>
+        <code>Enter</code> in an expression runs the trace<br>
+        click a typeset formula to edit it again<br><br>
+
+        <b>Labels</b><br>
+        The <code>y=</code> / <code>f(x)=</code> prefix names the curve so the hover
+        readout can tell them apart. Every expression is a function of <code>x</code>.
+      </div>
+     </div>
+    </div>
+  </section>
+</div>
+
+<button id="sideToggle" title="collapse / expand the panel (B)">
+  <span class="arrow">&lt;</span>
+</button>
+
+<div id="stage">
+  <canvas id="c"></canvas>
+  <div id="hud"></div>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+/* =====================================================================
+   EXPRESSION PARSER
+   Hand-written tokenizer + recursive-descent parser producing an AST,
+   which is then compiled to a real JS function. Nothing user-supplied is
+   ever passed to eval: the generated source contains only numeric
+   literals and whitelisted Math.* calls built from validated AST nodes.
+   ===================================================================== */
+
+const FUNCS = {
+  // circular
+  sin:1, cos:1, tan:1, sec:1, csc:1, cot:1,
+  // inverse circular
+  asin:1, acos:1, atan:1, asec:1, acsc:1, acot:1,
+  // hyperbolic
+  sinh:1, cosh:1, tanh:1, sech:1, csch:1, coth:1,
+  // inverse hyperbolic
+  asinh:1, acosh:1, atanh:1,
+  // exponential / logarithmic
+  exp:1, exp2:1, ln:1, log:1, log2:1, logb:2,
+  // roots / powers
+  sqrt:1, cbrt:1, nthroot:2, hypot:2, pow:2,
+  // rounding and step-like
+  abs:1, sign:1, floor:1, ceil:1, round:1, trunc:1, frac:1,
+  // special
+  gamma:1, fact:1, erf:1, sinc:1,
+  // combinatorics (both spellings accepted)
+  nCr:2, nPr:2, ncr:2, npr:2,
+  // multi-argument
+  min:2, max:2, mod:2, atan2:2, clamp:3, lerp:3,
+  // calculus — resolved symbolically at compile time, no runtime cost
+  deriv:1, deriv2:1, deriv3:1,
+};
+
+const CONSTS = { pi: Math.PI, tau: 2 * Math.PI, e: Math.E };
+const VAR = 'x';
+
+// longest-first so greedy matching prefers "sinh" over "sin" + "h", and
+// "nthroot" over "n" + ...
+const NAMES = [...Object.keys(FUNCS), ...Object.keys(CONSTS), VAR]
+  .sort((a, b) => b.length - a.length);
+
+/* ---------- helpers for functions JavaScript's Math doesn't provide ------- */
+
+// Lanczos approximation, g = 7, n = 9 — accurate to ~1e-15 for real x
+function gammaFn(z){
+  if (z < 0.5) return Math.PI / (Math.sin(Math.PI * z) * gammaFn(1 - z));
+  z -= 1;
+  const g = 7;
+  const C = [ 0.99999999999980993,   676.5203681218851,  -1259.1392167224028,
+              771.32342877765313,  -176.61502916214059,     12.507343278686905,
+             -0.13857109526572012,    9.9843695780195716e-6, 1.5056327351493116e-7 ];
+  let x = C[0];
+  for (let i = 1; i < g + 2; i++) x += C[i] / (z + i);
+  const t = z + g + 0.5;
+  return Math.sqrt(2 * Math.PI) * Math.pow(t, z + 0.5) * Math.exp(-t) * x;
+}
+
+function factFn(n){
+  if (Number.isInteger(n)){
+    if (n < 0) return NaN;                      // poles at negative integers
+    if (n > 170) return Infinity;               // beyond double range
+    let r = 1;
+    for (let i = 2; i <= n; i++) r *= i;
+    return r;
+  }
+  return gammaFn(n + 1);                        // continuous extension
+}
+
+function comb(n, r){
+  if (Number.isInteger(n) && Number.isInteger(r) && n >= 0 && r >= 0 && r <= n){
+    r = Math.min(r, n - r);
+    let res = 1;
+    for (let i = 1; i <= r; i++) res = res * (n - r + i) / i;
+    return Math.round(res);
+  }
+  return gammaFn(n + 1) / (gammaFn(r + 1) * gammaFn(n - r + 1));
+}
+function perm(n, r){
+  if (Number.isInteger(n) && Number.isInteger(r) && n >= 0 && r >= 0 && r <= n){
+    let res = 1;
+    for (let i = 0; i < r; i++) res *= (n - i);
+    return res;
+  }
+  return gammaFn(n + 1) / gammaFn(n - r + 1);
+}
+
+// Abramowitz & Stegun 7.1.26 — max error ~1.5e-7, plenty for plotting
+function erfFn(x){
+  const s = x < 0 ? -1 : 1;
+  const a = Math.abs(x);
+  const t = 1 / (1 + 0.3275911 * a);
+  const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t
+                   - 0.284496736) * t + 0.254829592) * t * Math.exp(-a * a);
+  return s * y;
+}
+
+// Recover p/q from a double, with q <= maxDen, via continued fractions.
+function toRational(x, maxDen){
+  const s = x < 0 ? -1 : 1;
+  let v = Math.abs(x);
+  let h0 = 0, h1 = 1, k0 = 1, k1 = 0;
+  for (let i = 0; i < 40; i++){
+    const a = Math.floor(v);
+    const h2 = a * h1 + h0, k2 = a * k1 + k0;
+    if (k2 > maxDen) break;
+    h0 = h1; h1 = h2;
+    k0 = k1; k1 = k2;
+    const f = v - a;
+    if (f < 1e-12) break;
+    v = 1 / f;
+    if (!isFinite(v)) break;
+  }
+  return [s * h1, k1 || 1];
+}
+
+// Real-valued power.
+//
+// Math.pow(-8, 2/3) is NaN, because a negative base with a non-integer exponent
+// has no real value *in general*. But it does when the exponent is a rational
+// p/q in lowest terms with q odd — that's precisely the case behind
+// x^(2/3) = (cube root of x)^2, which is real for every x.
+//
+// Write b = p/q with q odd. Then a^b = (-1)^p · |a|^b, so the sign depends only
+// on the parity of the numerator. If q is even (a square root, say) there is
+// genuinely no real result and NaN is correct.
+function powFn(a, b){
+  if (!(a < 0) || !isFinite(a) || !isFinite(b)) return Math.pow(a, b);
+  if (Number.isInteger(b)) return Math.pow(a, b);
+
+  const [p, q] = toRational(b, 1000);
+  if (q <= 1 || q % 2 === 0) return NaN;         // even root of a negative
+  if (Math.abs(p / q - b) > 1e-9) return NaN;    // not a rational we can trust
+  return (Math.abs(p) % 2 === 1 ? -1 : 1) * Math.pow(-a, b);
+}
+
+// Functions that need real code rather than a Math.* passthrough. Each becomes a
+// parameter of the compiled function, so user text never reaches the compiler.
+const HELP = {
+  sec:  x => 1 / Math.cos(x),
+  csc:  x => 1 / Math.sin(x),
+  cot:  x => Math.cos(x) / Math.sin(x),
+  sech: x => 1 / Math.cosh(x),
+  csch: x => 1 / Math.sinh(x),
+  coth: x => Math.cosh(x) / Math.sinh(x),
+  asec: x => Math.acos(1 / x),                    // domain |x| >= 1
+  acsc: x => Math.asin(1 / x),                    // domain |x| >= 1
+  acot: x => Math.PI / 2 - Math.atan(x),          // principal branch (0, pi)
+  exp2: x => Math.pow(2, x),
+  logb: (b, x) => Math.log(x) / Math.log(b),      // log base b
+  // odd roots of negatives are real, unlike Math.pow(-8, 1/3) which is NaN
+  nthroot: (n, x) => (x < 0 && Math.abs(n % 2) === 1)
+                      ? -Math.pow(-x, 1 / n) : Math.pow(x, 1 / n),
+  frac: x => x - Math.floor(x),
+  gamma: gammaFn,
+  fact: factFn,
+  erf: erfFn,
+  sinc: x => x === 0 ? 1 : Math.sin(x) / x,
+  nCr: comb, ncr: comb,
+  nPr: perm, npr: perm,
+  clamp: (x, lo, hi) => Math.min(hi, Math.max(lo, x)),
+  lerp: (a, b, t) => a + (b - a) * t,
+  mod: (a, b) => ((a % b) + b) % b,
+  rpow: powFn,          // used by the ^ operator and by pow(a,b)
+};
+const HELP_KEYS   = Object.keys(HELP);
+const HELP_PARAMS = HELP_KEYS.map(k => '$' + k);
+const HELP_VALS   = HELP_KEYS.map(k => HELP[k]);
+
+function normalize(src){
+  return src
+    .replace(/[\u2212\u2013\u2014]/g, '-')   // unicode minus / dashes
+    .replace(/[\u00d7\u22c5\u00b7\u2217]/g, '*')  // times signs
+    .replace(/\u00f7/g, '/')
+    .replace(/\u03c0/g, 'pi')
+    .replace(/\u221a/g, 'sqrt')
+    .replace(/\u00b2/g, '^2')
+    .replace(/\u00b3/g, '^3')
+    .replace(/\s+/g, '');
+}
+
+function tokenize(src){
+  const s = normalize(src);
+  const out = [];
+  let i = 0;
+
+  while (i < s.length){
+    const c = s[i];
+
+    if (c >= '0' && c <= '9' || c === '.'){
+      let j = i;
+      while (j < s.length && (s[j] >= '0' && s[j] <= '9' || s[j] === '.')) j++;
+      const text = s.slice(i, j);
+      const v = parseFloat(text);
+      if (!isFinite(v)) throw new Error('bad number "' + text + '"');
+      out.push({ t:'num', v, text });
+      i = j;
+      continue;
+    }
+
+    if (/[a-zA-Z]/.test(c)){
+      // greedy longest-match against known names, allowing concatenation
+      // so "2pix" reads as 2*pi*x
+      let matchedAny = false;
+      while (i < s.length && /[a-zA-Z_]/.test(s[i])){
+        let hit = null;
+        for (const n of NAMES){
+          if (s.startsWith(n, i)){ hit = n; break; }
+        }
+        if (!hit) throw new Error('unknown name "' + s.slice(i).replace(/[^a-zA-Z_].*$/, '') + '"');
+        i += hit.length;
+        matchedAny = true;
+        if (FUNCS[hit] !== undefined) out.push({ t:'func', name:hit, text:hit });
+        else if (CONSTS[hit] !== undefined) out.push({ t:'const', v:CONSTS[hit], text:hit });
+        else out.push({ t:'x', text:hit });
+        // stop concatenating once we've consumed a function name
+        if (FUNCS[hit] !== undefined) break;
+      }
+      if (!matchedAny) throw new Error('unexpected "' + c + '"');
+      continue;
+    }
+
+    if (c === '('){ out.push({ t:'lparen', text:c }); i++; continue; }
+    if (c === ')'){ out.push({ t:'rparen', text:c }); i++; continue; }
+    if (c === ','){ out.push({ t:'comma', text:c }); i++; continue; }
+    if (c === '|'){ out.push({ t:'bar', text:c }); i++; continue; }
+    if ('+-*/^!'.includes(c)){ out.push({ t:'op', v:c, text:c }); i++; continue; }
+
+    throw new Error('unexpected character "' + c + '"');
+  }
+  return out;
+}
+
+function parse(tokens){
+  let pos = 0;
+  let pendingBars = 0;   // bars opened but not yet closed
+  const peek = () => tokens[pos];
+  const next = () => tokens[pos++];
+
+  function startsAtom(t){
+    if (!t) return false;
+    // A '|' only begins an atom when we're not already inside one, otherwise
+    // it's the *closing* bar of the group we're in — so |x| parses as abs(x)
+    // rather than abs(x * <open>) which runs off the end of the input.
+    if (t.t === 'bar') return pendingBars === 0;
+    return t.t === 'num' || t.t === 'const' || t.t === 'x' ||
+           t.t === 'func' || t.t === 'lparen';
+  }
+
+  function expr(){
+    let node = term();
+    for (;;){
+      const t = peek();
+      if (t && t.t === 'op' && (t.v === '+' || t.v === '-')){
+        next();
+        node = { k:'bin', op:t.v, a:node, b:term() };
+      } else break;
+    }
+    return node;
+  }
+
+  function term(){
+    let node = unary();
+    for (;;){
+      const t = peek();
+      if (!t) break;
+      if (t.t === 'op' && (t.v === '*' || t.v === '/')){
+        next();
+        node = { k:'bin', op:t.v, a:node, b:unary() };
+      } else if (startsAtom(t)){
+        node = { k:'bin', op:'*', a:node, b:unary() };   // implicit multiplication
+      } else break;
+    }
+    return node;
+  }
+
+  function unary(){
+    const t = peek();
+    if (t && t.t === 'op' && (t.v === '-' || t.v === '+')){
+      next();
+      const a = unary();
+      return t.v === '-' ? { k:'neg', a } : a;
+    }
+    return power();
+  }
+
+  function power(){
+    const base = postfix();
+    const t = peek();
+    if (t && t.t === 'op' && t.v === '^'){
+      next();
+      return { k:'bin', op:'^', a:base, b:unary() };   // right associative
+    }
+    return base;
+  }
+
+  // postfix factorial binds tighter than ^, so 2!^3 = (2!)^3 and 2^3! = 2^(3!)
+  function postfix(){
+    let n = atom();
+    for (;;){
+      const t = peek();
+      if (t && t.t === 'op' && t.v === '!'){ next(); n = { k:'call', name:'fact', args:[n] }; }
+      else break;
+    }
+    return n;
+  }
+
+  function atom(){
+    const t = next();
+    if (!t) throw new Error('unexpected end of expression');
+
+    if (t.t === 'num')   return { k:'num', v:t.v };
+    if (t.t === 'const') return { k:'num', v:t.v, sym:t.text };  // keep the name for display
+    if (t.t === 'x')     return { k:'x' };
+
+    if (t.t === 'func'){
+      let n = FUNCS[t.name];
+      const nx = peek();
+      if (!nx || nx.t !== 'lparen'){
+        throw new Error('expected ( after ' + t.name);
+      }
+      next();
+      const args = [expr()];
+      while (peek() && peek().t === 'comma'){
+        next();
+        args.push(expr());
+      }
+      const close = next();
+      if (!close || close.t !== 'rparen') throw new Error('missing ) after ' + t.name);
+      if (args.length !== n){
+        throw new Error(t.name + ' takes ' + n + ' argument' + (n > 1 ? 's' : ''));
+      }
+      return { k:'call', name:t.name, args };
+    }
+
+    if (t.t === 'lparen'){
+      const e = expr();
+      const close = next();
+      if (!close || close.t !== 'rparen') throw new Error('missing )');
+      return e;
+    }
+
+    if (t.t === 'bar'){
+      pendingBars++;
+      const e = expr();
+      const close = next();
+      if (!close || close.t !== 'bar') throw new Error('missing closing |');
+      pendingBars--;
+      return { k:'call', name:'abs', args:[e] };
+    }
+
+    throw new Error('unexpected "' + t.text + '"');
+  }
+
+  const ast = expr();
+  if (pos < tokens.length) throw new Error('unexpected "' + tokens[pos].text + '"');
+  return ast;
+}
+
+const MATHMAP = {
+  sin:'Math.sin', cos:'Math.cos', tan:'Math.tan',
+  asin:'Math.asin', acos:'Math.acos', atan:'Math.atan',
+  sinh:'Math.sinh', cosh:'Math.cosh', tanh:'Math.tanh',
+  asinh:'Math.asinh', acosh:'Math.acosh', atanh:'Math.atanh',
+  ln:'Math.log', log:'Math.log10', log2:'Math.log2',
+  sqrt:'Math.sqrt', cbrt:'Math.cbrt', abs:'Math.abs', exp:'Math.exp',
+  floor:'Math.floor', ceil:'Math.ceil', round:'Math.round',
+  trunc:'Math.trunc', sign:'Math.sign',
+  min:'Math.min', max:'Math.max', pow:'Math.pow',
+  hypot:'Math.hypot', atan2:'Math.atan2',
+};
+
+/* ---------- AST constructors, used by the differentiator ---------- */
+const N   = v => ({ k:'num', v });
+const VX  = () => ({ k:'x' });
+const ADD = (a,b) => ({ k:'bin', op:'+', a, b });
+const SUB = (a,b) => ({ k:'bin', op:'-', a, b });
+const MUL = (a,b) => ({ k:'bin', op:'*', a, b });
+const DIV = (a,b) => ({ k:'bin', op:'/', a, b });
+const POW = (a,b) => ({ k:'bin', op:'^', a, b });
+const NEG = a     => ({ k:'neg', a });
+const CALL= (name, ...args) => ({ k:'call', name, args });
+
+const isNum = n => n.k === 'num';
+
+function dependsOnX(n){
+  switch (n.k){
+    case 'num':  return false;
+    case 'x':    return true;
+    case 'neg':  return dependsOnX(n.a);
+    case 'bin':  return dependsOnX(n.a) || dependsOnX(n.b);
+    case 'call': return n.args.some(dependsOnX);
+  }
+  return true;
+}
+
+// Pull out the constant-folding / identity rules so deriv() output reads like
+// something a person would write, not a pile of *1 and ^0 terms.
+function simplify(n){
+  switch (n.k){
+    case 'num': case 'x': return n;
+    case 'neg': {
+      const a = simplify(n.a);
+      if (isNum(a)) return N(-a.v);
+      if (a.k === 'neg') return a.a;
+      return NEG(a);
+    }
+    case 'bin': {
+      const a = simplify(n.a), b = simplify(n.b);
+      const both = isNum(a) && isNum(b);
+      switch (n.op){
+        case '+':
+          if (isNum(a) && a.v === 0) return b;
+          if (isNum(b) && b.v === 0) return a;
+          if (both) return N(a.v + b.v);
+          break;
+        case '-':
+          if (isNum(b) && b.v === 0) return a;
+          if (both) return N(a.v - b.v);
+          break;
+        case '*':
+          if ((isNum(a) && a.v === 0) || (isNum(b) && b.v === 0)) return N(0);
+          if (isNum(a) && a.v === 1) return b;
+          if (isNum(b) && b.v === 1) return a;
+          if (both) return N(a.v * b.v);
+          break;
+        case '/':
+          if (isNum(a) && a.v === 0) return N(0);
+          if (isNum(b) && b.v === 1) return a;
+          if (both && b.v !== 0) return N(a.v / b.v);
+          break;
+        case '^':
+          if (isNum(b) && b.v === 1) return a;
+          if (isNum(b) && b.v === 0) return N(1);
+          if (isNum(a) && a.v === 1) return N(1);
+          if (both) return N(Math.pow(a.v, b.v));
+          break;
+      }
+      return { k:'bin', op:n.op, a, b };
+    }
+    case 'call': {
+      const args = n.args.map(simplify);
+      if (n.name === 'fact' && isNum(args[0])) return N(factFn(args[0].v));
+      return { k:'call', name:n.name, args:args };
+    }
+  }
+  return n;
+}
+
+// d/du of the outer function, evaluated at u. Chain rule is applied by the
+// caller as outer(u) * u'.
+function outerDiff(name, u){
+  switch (name){
+    case 'sin':  return CALL('cos', u);
+    case 'cos':  return NEG(CALL('sin', u));
+    case 'tan':  return DIV(N(1), POW(CALL('cos', u), N(2)));
+    case 'sec':  return MUL(CALL('sec', u), CALL('tan', u));
+    case 'csc':  return NEG(MUL(CALL('csc', u), CALL('cot', u)));
+    case 'cot':  return NEG(DIV(N(1), POW(CALL('sin', u), N(2))));
+    case 'asin': return DIV(N(1), CALL('sqrt', SUB(N(1), POW(u, N(2)))));
+    case 'acos': return NEG(DIV(N(1), CALL('sqrt', SUB(N(1), POW(u, N(2))))));
+    case 'atan': return DIV(N(1), ADD(N(1), POW(u, N(2))));
+    case 'exp':  return CALL('exp', u);
+    case 'exp2': return MUL(CALL('exp2', u), N(Math.LN2));
+    case 'ln':   return DIV(N(1), u);
+    case 'log':  return DIV(N(1), MUL(u, N(Math.LN10)));
+    case 'log2': return DIV(N(1), MUL(u, N(Math.LN2)));
+    case 'sqrt': return DIV(N(1), MUL(N(2), CALL('sqrt', u)));
+    case 'cbrt': return DIV(N(1), MUL(N(3), POW(CALL('cbrt', u), N(2))));
+    case 'abs':  return CALL('sign', u);
+    case 'sinh': return CALL('cosh', u);
+    case 'cosh': return CALL('sinh', u);
+    case 'tanh': return DIV(N(1), POW(CALL('cosh', u), N(2)));
+    case 'asinh':return DIV(N(1), CALL('sqrt', ADD(POW(u, N(2)), N(1))));
+    case 'acosh':return DIV(N(1), CALL('sqrt', SUB(POW(u, N(2)), N(1))));
+    case 'atanh':return DIV(N(1), SUB(N(1), POW(u, N(2))));
+    case 'erf':  return MUL(N(2 / Math.sqrt(Math.PI)), CALL('exp', NEG(POW(u, N(2)))));
+    // piecewise-constant: zero almost everywhere
+    case 'sign': case 'floor': case 'ceil': case 'round': case 'trunc': case 'frac':
+      return N(0);
+    default: return null;
+  }
+}
+
+// symbolic derivative of an AST with respect to x
+function diff(n){
+  switch (n.k){
+    case 'num': return N(0);
+    case 'x':   return N(1);
+    case 'neg': return NEG(diff(n.a));
+
+    case 'bin': {
+      const a = n.a, b = n.b;
+      switch (n.op){
+        case '+': return ADD(diff(a), diff(b));
+        case '-': return SUB(diff(a), diff(b));
+        case '*': return ADD(MUL(diff(a), b), MUL(a, diff(b)));
+        case '/': return DIV(SUB(MUL(diff(a), b), MUL(a, diff(b))), POW(b, N(2)));
+        case '^': {
+          if (!dependsOnX(b)) return MUL(MUL(b, POW(a, SUB(b, N(1)))), diff(a));
+          if (!dependsOnX(a)) return MUL(MUL(POW(a, b), CALL('ln', a)), diff(b));
+          return MUL(POW(a, b),
+                     ADD(MUL(diff(b), CALL('ln', a)),
+                         MUL(b, DIV(diff(a), a))));
+        }
+      }
+      break;
+    }
+
+    case 'call': {
+      if (n.name === 'deriv' || n.name === 'deriv2' || n.name === 'deriv3'){
+        throw new Error('deriv() cannot be nested inside deriv()');
+      }
+      if (n.args.length > 1){
+        // a couple of multi-argument cases worth supporting
+        if (n.name === 'pow' && !dependsOnX(n.args[1])){
+          return MUL(MUL(n.args[1], POW(n.args[0], SUB(n.args[1], N(1)))),
+                     diff(n.args[0]));
+        }
+        if (n.name === 'logb' && !dependsOnX(n.args[0])){
+          return DIV(diff(n.args[1]), MUL(n.args[1], CALL('ln', n.args[0])));
+        }
+        throw new Error('deriv(): cannot differentiate ' + n.name +
+                        '() with several arguments');
+      }
+      const u = n.args[0];
+      const outer = outerDiff(n.name, u);
+      if (outer === null){
+        throw new Error('deriv(): cannot differentiate ' + n.name + '()');
+      }
+      return MUL(outer, diff(u));
+    }
+  }
+  throw new Error('deriv(): cannot differentiate this expression');
+}
+
+function toJS(node){
+  switch (node.k){
+    case 'num': return '(' + node.v + ')';
+    case 'x':   return 'x';
+    case 'neg': return '(-' + toJS(node.a) + ')';
+    case 'bin': {
+      const a = toJS(node.a), b = toJS(node.b);
+      // $rpow rather than Math.pow: a negative base with an odd-denominator
+      // rational exponent does have a real root, so x^(2/3) plots for x < 0
+      if (node.op === '^') return '$rpow(' + a + ',' + b + ')';
+      return '(' + a + node.op + b + ')';
+    }
+    case 'call': {
+      // calculus: differentiate symbolically, simplify, then compile the result
+      if (node.name === 'deriv' || node.name === 'deriv2' || node.name === 'deriv3'){
+        const times = node.name === 'deriv' ? 1 : node.name === 'deriv2' ? 2 : 3;
+        let d = node.args[0];
+        for (let i = 0; i < times; i++) d = simplify(diff(d));
+        return toJS(d);
+      }
+      const a = node.args.map(toJS);
+      if (node.name === 'pow') return '$rpow(' + a.join(',') + ')';
+      if (HELP[node.name] !== undefined) return '$' + node.name + '(' + a.join(',') + ')';
+      const m = MATHMAP[node.name];
+      if (!m) throw new Error('no implementation for ' + node.name + '()');
+      return m + '(' + a.join(',') + ')';
+    }
+  }
+  throw new Error('bad node');
+}
+
+// Returns { fn, error }. fn(x) -> number
+function compile(src){
+  try {
+    if (!src || !src.trim()) return { fn:null, error:'', ast:null };
+    const ast  = parse(tokenize(src));
+    const body = 'return ' + toJS(ast) + ';';
+    // helpers arrive as parameters, so the generated source contains nothing
+    // but numeric literals, Math.* calls and those parameter names
+    const raw  = new Function('x', ...HELP_PARAMS, body);
+    const fn   = (x) => raw(x, ...HELP_VALS);
+    try { fn(0.5); } catch (_) { /* runtime hiccup at the probe point is fine */ }
+    return { fn, error:'', ast };
+  } catch (e) {
+    return { fn:null, error: e.message, ast:null };
+  }
+}
+
+/* =====================================================================
+   LaTeX-STYLE TYPESETTING
+   Turns a parsed AST into DOM with real maths layout: stacked fractions,
+   raised exponents, radical bars, italic variables, upright function
+   names. No external library, so it works offline.
+   ===================================================================== */
+
+const PREC = { '+':1, '-':1, '*':2, '/':2, '^':4 };
+
+function mEl(tag, cls, txt){
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (txt !== undefined) e.textContent = txt;
+  return e;
+}
+const mSpan = (cls, txt) => mEl('span', cls, txt);
+
+// Names that should typeset as a symbol rather than their numeric value.
+const CONST_SYM = { pi:'\u03c0', tau:'\u03c4', e:'e' };
+
+function numText(v){
+  if (Number.isInteger(v)) return String(v);
+  return String(Number(v.toPrecision(10)));
+}
+
+function needsParens(child, parentOp, isRight){
+  if (child.k === 'bin'){
+    const cp = PREC[child.op], pp = PREC[parentOp];
+    if (cp < pp) return true;
+    if (cp === pp && isRight && (parentOp === '-' || parentOp === '/')) return true;
+  }
+  if (child.k === 'neg' && parentOp !== '+' && parentOp !== '-') return true;
+  return false;
+}
+
+function renderMath(node){
+  switch (node.k){
+    case 'num': {
+      // a named constant keeps its name: sin(pi/2), not sin(3.141592654/2)
+      if (node.sym && CONST_SYM[node.sym] !== undefined){
+        return mSpan('m-const', CONST_SYM[node.sym]);
+      }
+      return mSpan('m-num', numText(node.v));
+    }
+    case 'x':   return mSpan('m-var', 'x');
+    case 'neg': {
+      const w = mSpan('m-row');
+      w.append(mSpan('m-op', '\u2212'), renderMath(node.a));
+      return w;
+    }
+    case 'bin':  return renderBin(node);
+    case 'call': return renderCall(node);
+  }
+  return mSpan('m-num', '?');
+}
+
+function wrapNode(child, op, isRight){
+  if (!needsParens(child, op, isRight)) return renderMath(child);
+  const w = mSpan('m-row');
+  w.append(mSpan('m-paren','('), renderMath(child), mSpan('m-paren',')'));
+  return w;
+}
+
+function renderBin(n){
+  const op = n.op;
+
+  if (op === '/'){
+    const w = mSpan('m-frac');
+    const num = mSpan('m-fnum'), den = mSpan('m-fden');
+    num.append(renderMath(n.a));
+    den.append(renderMath(n.b));
+    w.append(num, den);
+    return w;
+  }
+
+  if (op === '^'){
+    const w = mSpan('m-row');
+    w.append(wrapNode(n.a, '^', false));
+    const sup = mSpan('m-sup');
+    sup.append(renderMath(n.b));
+    w.append(sup);
+    return w;
+  }
+
+  const w = mSpan('m-row');
+  if (op === '*'){
+    const left  = wrapNode(n.a, '*', false);
+    const right = wrapNode(n.b, '*', true);
+    // a numeric coefficient melts into what it multiplies: "2x", not "2 . x"
+    if (n.a.k === 'num' && n.b.k !== 'num') w.append(left, right);
+    else w.append(left, mSpan('m-op', '\u00b7'), right);
+    return w;
+  }
+
+  w.append(wrapNode(n.a, op, false),
+           mSpan('m-op', op === '-' ? '\u2212' : '+'),
+           wrapNode(n.b, op, true));
+  return w;
+}
+
+function renderCall(n){
+  const name = n.name;
+
+  if (name === 'abs'){
+    const w = mSpan('m-row');
+    w.append(mSpan('m-paren','|'), renderMath(n.args[0]), mSpan('m-paren','|'));
+    return w;
+  }
+
+  if (name === 'sqrt' || name === 'cbrt'){
+    const w = mSpan('m-sqrt');
+    w.append(mSpan('m-radical', name === 'sqrt' ? '\u221a' : '\u221b'));
+    const inner = mSpan('m-radicand');
+    inner.append(renderMath(n.args[0]));
+    w.append(inner);
+    return w;
+  }
+
+  if (name === 'fact'){
+    const w = mSpan('m-row');
+    w.append(wrapNode(n.args[0], '^', false), mSpan('m-op', '!'));
+    return w;
+  }
+
+  if (name === 'deriv' || name === 'deriv2' || name === 'deriv3'){
+    const times = name === 'deriv' ? 1 : name === 'deriv2' ? 2 : 3;
+    const w = mSpan('m-row');
+    const f = mSpan('m-frac m-small');
+    const num = mSpan('m-fnum'), den = mSpan('m-fden');
+    num.append(mSpan('m-fn','d'));
+    den.append(mSpan('m-fn','d'), mSpan('m-var','x'));
+    if (times > 1){
+      const sn = mSpan('m-sup'); sn.append(mSpan('m-num', String(times)));
+      num.append(sn);
+      const sd = mSpan('m-sup'); sd.append(mSpan('m-num', String(times)));
+      den.append(sd);
+    }
+    f.append(num, den);
+    const arg = mSpan('m-row');
+    arg.append(mSpan('m-paren','('), renderMath(n.args[0]), mSpan('m-paren',')'));
+    w.append(f, arg);
+    return w;
+  }
+
+  // generic: upright function name, parenthesised arguments
+  const w = mSpan('m-row');
+  const glyph = name === 'gamma' ? '\u0393' : name;
+  w.append(mSpan(name === 'gamma' ? 'm-const' : 'm-fn', glyph));
+  const p = mSpan('m-row');
+  p.append(mSpan('m-paren','('));
+  n.args.forEach((a, i) => {
+    if (i) p.append(mSpan('m-op', ','));
+    p.append(renderMath(a));
+  });
+  p.append(mSpan('m-paren',')'));
+  w.append(p);
+  return w;
+}
+
+/* =====================================================================
+   STATE
+   ===================================================================== */
+
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+const stage  = document.getElementById('stage');
+let CW = 0, CH = 0, DPR = 1;
+
+const view = { cx:0, cy:0, scale:52 };     // world centre + pixels per unit
+const TRACE_BASE = 1.6;                     // seconds at 1x
+
+let funcs = [];
+let seq = 0;
+let speedMul = 1;
+const opts = { axes:true, grid:true, labels:true, readout:false, tip:true };
+
+const PALETTE = ['#57a6ff','#ff8f6b','#4ade80','#fbbf24','#c084fc',
+                 '#f472b6','#22d3ee','#a3e635','#fb7185','#38bdf8'];
+
+// Prefixes a curve can be named with. Purely cosmetic — every expression is a
+// function of x — but it labels the curve in the hover readout so you can tell
+// several apart at a glance.
+const LABEL_POOL = ['y=', 'f(x)=', 'g(x)=', 'h(x)=', 'k(x)=', 'p(x)=', 'q(x)=',
+                    'r(x)=', 's(x)=', 't(x)=', 'u(x)=', 'v(x)=', 'w(x)=',
+                    'y\u2081=', 'y\u2082=', 'y\u2083='];
+
+function nextLabel(){
+  const used = new Set(funcs.map(f => f.label));
+  for (const L of LABEL_POOL) if (!used.has(L)) return L;
+  return 'y=';
+}
+
+/* =====================================================================
+   VIEW HELPERS
+   ===================================================================== */
+
+const X = wx => (wx - view.cx) * view.scale + CW / 2;
+const Y = wy => CH / 2 - (wy - view.cy) * view.scale;
+const invX = sx => (sx - CW / 2) / view.scale + view.cx;
+const invY = sy => (CH / 2 - sy) / view.scale + view.cy;
+
+const xmin = () => invX(0);
+const xmax = () => invX(CW);
+const ymin = () => invY(CH);
+const ymax = () => invY(0);
+
+function niceStep(range, target){
+  const raw = range / Math.max(1, target);
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const n = raw / mag;
+  const m = n < 1.5 ? 1 : n < 3 ? 2 : n < 7 ? 5 : 10;
+  return m * mag;
+}
+
+function fmtTick(v, step){
+  if (v === 0) return '0';
+  const dec = Math.max(0, Math.min(8, -Math.floor(Math.log10(step)) + 1));
+  let s = v.toFixed(dec);
+  if (s.includes('.')) s = s.replace(/0+$/, '').replace(/\.$/, '');
+  return s === '-0' ? '0' : s;
+}
+
+/* =====================================================================
+   RENDERING
+   ===================================================================== */
+
+function resize(){
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  CW = stage.clientWidth;
+  CH = stage.clientHeight;
+  canvas.style.width  = CW + 'px';
+  canvas.style.height = CH + 'px';
+
+  // Assigning canvas.width/height WIPES the canvas. Doing that unconditionally
+  // on every ResizeObserver tick during the sidebar animation would blank the
+  // plot for a frame each time — that's the flash. Only touch them on a real
+  // size change.
+  const w = Math.max(1, Math.round(CW * DPR));
+  const h = Math.max(1, Math.round(CH * DPR));
+  if (canvas.width  !== w) canvas.width  = w;
+  if (canvas.height !== h) canvas.height = h;
+
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+
+function drawGrid(){
+  const sx = niceStep(xmax() - xmin(), Math.max(3, Math.round(CW / 95)));
+  const sy = niceStep(ymax() - ymin(), Math.max(3, Math.round(CH / 95)));
+
+  ctx.save();
+  ctx.lineWidth = 1;
+
+  // minor + major gridlines
+  ctx.strokeStyle = 'rgba(87,166,255,0.07)';
+  ctx.beginPath();
+  for (let x = Math.ceil(xmin() / sx) * sx; x <= xmax(); x += sx){
+    const px = Math.round(X(x)) + 0.5;
+    ctx.moveTo(px, 0); ctx.lineTo(px, CH);
+  }
+  for (let y = Math.ceil(ymin() / sy) * sy; y <= ymax(); y += sy){
+    const py = Math.round(Y(y)) + 0.5;
+    ctx.moveTo(0, py); ctx.lineTo(CW, py);
+  }
+  ctx.stroke();
+  ctx.restore();
+
+  return { sx, sy };
+}
+
+function drawAxes(steps){
+  const ax = X(0), ay = Y(0);
+  const xOn = ax >= -1 && ax <= CW + 1;
+  const yOn = ay >= -1 && ay <= CH + 1;
+
+  ctx.save();
+  ctx.strokeStyle = 'rgba(218,227,244,0.55)';
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  if (yOn){ ctx.moveTo(0, Math.round(ay) + 0.5); ctx.lineTo(CW, Math.round(ay) + 0.5); }
+  if (xOn){ ctx.moveTo(Math.round(ax) + 0.5, 0); ctx.lineTo(Math.round(ax) + 0.5, CH); }
+  ctx.stroke();
+
+  // tick marks
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  if (yOn){
+    for (let x = Math.ceil(xmin() / steps.sx) * steps.sx; x <= xmax(); x += steps.sx){
+      const px = Math.round(X(x)) + 0.5;
+      ctx.moveTo(px, ay - 4); ctx.lineTo(px, ay + 4);
+    }
+  }
+  if (xOn){
+    for (let y = Math.ceil(ymin() / steps.sy) * steps.sy; y <= ymax(); y += steps.sy){
+      const py = Math.round(Y(y)) + 0.5;
+      ctx.moveTo(ax - 4, py); ctx.lineTo(ax + 4, py);
+    }
+  }
+  ctx.stroke();
+
+  if (opts.labels){
+    ctx.fillStyle = 'rgba(218,227,244,0.62)';
+    ctx.font = '10px ui-monospace, Menlo, Consolas, monospace';
+
+    // x labels sit just under the x-axis, clamped into view if it's offscreen
+    const ly = Math.min(CH - 4, Math.max(12, ay + 14));
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (let x = Math.ceil(xmin() / steps.sx) * steps.sx; x <= xmax(); x += steps.sx){
+      if (Math.abs(x) < steps.sx * 1e-6) continue;
+      ctx.fillText(fmtTick(x, steps.sx), X(x), ly);
+    }
+
+    // y labels sit just left of the y-axis, clamped into view
+    const lx = Math.min(CW - 26, Math.max(22, ax - 8));
+    ctx.textAlign = 'right';
+    for (let y = Math.ceil(ymin() / steps.sy) * steps.sy; y <= ymax(); y += steps.sy){
+      if (Math.abs(y) < steps.sy * 1e-6) continue;
+      ctx.fillText(fmtTick(y, steps.sy), lx, Y(y));
+    }
+
+    // origin
+    if (ax > 14 && ax < CW - 14 && ay > 10 && ay < CH - 10){
+      ctx.textAlign = 'right';
+      ctx.fillText('0', ax - 7, ay + 13);
+    }
+  }
+  ctx.restore();
+}
+
+function drawCurve(f){
+  if (f.alpha <= 0.004 || !f.fn || f.progress <= 0) return;
+
+  const x0 = xmin(), x1 = xmax();
+  const span = x1 - x0;
+  if (!(span > 0)) return;
+
+  // only draw up to the current trace position
+  const xEnd = x0 + span * f.progress;
+  const step = span / SAMPLE_N;
+  const viewH = ymax() - ymin();
+  const yLo = ymin() - viewH * 2;
+  const yHi = ymax() + viewH * 2;
+
+  ctx.save();
+  ctx.strokeStyle = f.color;
+  ctx.globalAlpha = f.alpha;
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+
+  let pen = false, prevX = null, prevY = null, lastPx = null, lastPy = null;
+
+  for (let x = x0; x <= xEnd + step * 0.5; x += step){
+    const xx = Math.min(x, xEnd);
+    let y = f.fn(xx);
+
+    if (typeof y !== 'number' || !isFinite(y)){
+      pen = false; prevX = prevY = null; continue;
+    }
+
+    if (prevY !== null && Math.abs(y - prevY) > viewH * 0.25){
+      // Sample three interior points and ask whether the function behaves like
+      // a continuous curve between the endpoints.
+      //
+      // The decisive test is the sign change. A continuous function that flips
+      // sign must pass through zero, so if the endpoints straddle zero but no
+      // interior point comes nearer to zero than they do, the function ran off
+      // to infinity and back — a pole. That is what joins x^(-1/3)'s two
+      // branches with a vertical line.
+      //
+      // Magnitude alone can't do this job: 10000x also has large, opposite-signed
+      // endpoints, yet it really does pass through the origin and must be drawn.
+      const lo = Math.min(prevY, y), hi = Math.max(prevY, y);
+      const minAbs = Math.min(Math.abs(prevY), Math.abs(y));
+      const flipped = (prevY < 0) !== (y < 0);
+      const tol = (hi - lo) * 0.25 + viewH * 0.05;
+
+      let bad = false, sawSmaller = false;
+      for (const t of [0.25, 0.5, 0.75]){
+        const ym = f.fn(prevX + (xx - prevX) * t);
+        if (typeof ym !== 'number' || !isFinite(ym)){ bad = true; break; }
+        if (Math.abs(ym) < minAbs) sawSmaller = true;
+        if (ym < lo - tol || ym > hi + tol) bad = true;
+      }
+      // The sign-change rule needs both endpoints to be meaningfully off the
+      // axis. When float accumulation drops a sample essentially ON a root
+      // (x*1000 at x≈1e-13 gives 1e-10), that endpoint is ~0 by construction
+      // and no probe can be smaller — which would break a perfectly straight,
+      // continuous line. Requiring a minimum distance from zero fixes that.
+      if (!bad && flipped && !sawSmaller && minAbs > viewH * 0.05) bad = true;
+      if (bad) pen = false;
+    }
+
+    const cy = y < yLo ? yLo : y > yHi ? yHi : y;
+    const px = X(xx), py = Y(cy);
+
+    if (!pen){ ctx.moveTo(px, py); pen = true; }
+    else ctx.lineTo(px, py);
+
+    prevX = xx; prevY = y;
+    lastPx = px; lastPy = Y(y);
+  }
+  ctx.stroke();
+
+  // pen tip while still tracing
+  if (opts.tip && f.progress < 1 && lastPx !== null &&
+      lastPx >= -20 && lastPx <= CW + 20 && lastPy >= -20 && lastPy <= CH + 20){
+    ctx.beginPath();
+    ctx.arc(lastPx, lastPy, 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = f.color;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawReadout(mx, my){
+  if (!opts.readout || mx === null) return;
+
+  const wx = invX(mx), wy = invY(my);
+  const px = X(wx), py = Y(wy);
+
+  ctx.save();
+  ctx.setLineDash([3, 3]);
+  ctx.strokeStyle = 'rgba(218,227,244,0.35)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(px, 0); ctx.lineTo(px, CH);
+  ctx.moveTo(0, py); ctx.lineTo(CW, py);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // value of each visible traced curve at this x
+  const rows = [];
+  for (const f of funcs){
+    if (f.alpha <= 0.5 || !f.fn || f.progress <= 0) continue;
+    const t = f.progress * (xmax() - xmin()) + xmin();
+    if (wx > t) continue;
+    let v = f.fn(wx);
+    if (typeof v !== 'number' || !isFinite(v)) continue;
+    rows.push({ color:f.color, v, label:f.label });
+    const cy = Y(v);
+    if (cy > -50 && cy < CH + 50){
+      ctx.beginPath();
+      ctx.arc(px, cy, 3.5, 0, Math.PI * 2);
+      ctx.fillStyle = f.color;
+      ctx.fill();
+    }
+  }
+
+  const lines = ['x = ' + wx.toFixed(3), 'y = ' + wy.toFixed(3)]
+    .concat(rows.map(r => r.label + ' ' + r.v.toFixed(4)));
+
+  ctx.font = '11px ui-monospace, Menlo, Consolas, monospace';
+  const w = Math.max(...lines.map(l => ctx.measureText(l).width)) + 16;
+  const h = lines.length * 15 + 10;
+  let bx = px + 14, by = py + 14;
+  if (bx + w > CW - 6) bx = px - w - 14;
+  if (by + h > CH - 6) by = py - h - 14;
+
+  ctx.fillStyle = 'rgba(14,21,36,0.94)';
+  ctx.strokeStyle = 'rgba(34,48,74,1)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  const r = 6;
+  ctx.moveTo(bx + r, by);
+  ctx.arcTo(bx + w, by, bx + w, by + h, r);
+  ctx.arcTo(bx + w, by + h, bx, by + h, r);
+  ctx.arcTo(bx, by + h, bx, by, r);
+  ctx.arcTo(bx, by, bx + w, by, r);
+  ctx.closePath();
+  ctx.fill(); ctx.stroke();
+
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = 'rgba(218,227,244,0.9)';
+  ctx.fillText(lines[0], bx + 8, by + 13);
+  ctx.fillText(lines[1], bx + 8, by + 28);
+  rows.forEach((row, i) => {
+    ctx.fillStyle = row.color;
+    ctx.fillText(lines[2 + i], bx + 8, by + 43 + i * 15);
+  });
+  ctx.restore();
+}
+
+const SAMPLE_N = 1600;
+let mouse = { x:null, y:null };
+
+function render(){
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.clearRect(0, 0, CW, CH);
+
+  const steps = opts.grid ? drawGrid() : { sx:1, sy:1 };
+  if (opts.axes) drawAxes(steps);
+  else if (opts.grid) drawAxes(steps);   // grid on but axes off -> still need ticks? no ticks
+
+  for (const f of funcs) drawCurve(f);
+  drawReadout(mouse.x, mouse.y);
+}
+
+/* =====================================================================
+   TRACING
+   ===================================================================== */
+
+function pendingCount(){
+  return funcs.filter(f => f.visible && f.fn && f.progress < 1).length;
+}
+
+function run(){
+  const pending = funcs.filter(f => f.visible && f.fn && f.progress < 1);
+  const bad = funcs.filter(f => f.visible && f.error).length;
+
+  if (!pending.length){
+    status(bad ? 'nothing to trace — ' + bad + ' expression' + (bad > 1 ? 's have' : ' has') + ' an error'
+               : 'all expressions already traced');
+    return;
+  }
+  // hand any already-full trace back to the start so Run always animates
+  // only the ones that are genuinely new / changed
+  status('tracing ' + pending.length + ' function' + (pending.length > 1 ? 's' : '') + '…');
+  tracing = true;
+}
+
+let tracing = false;
+
+function tick(dt){
+  // Visibility fade runs every frame regardless of tracing, so toggling a
+  // curve off dissolves it instead of blinking it out.
+  for (const f of funcs){
+    const target = f.visible ? 1 : 0;
+    if (f.alpha !== target){
+      const k = 1 - Math.exp(-dt * 9);        // exponential approach
+      f.alpha += (target - f.alpha) * k;
+      if (Math.abs(target - f.alpha) < 0.004) f.alpha = target;
+    }
+  }
+
+  if (!tracing) return;
+  let any = false;
+  for (const f of funcs){
+    if (f.visible && f.fn && f.progress < 1){
+      f.progress = Math.min(1, f.progress + dt / (TRACE_BASE / speedMul));
+      any = true;
+    }
+  }
+  if (!any){
+    tracing = false;
+    status('done');
+  }
+}
+
+/* =====================================================================
+   UI
+   ===================================================================== */
+
+const fnList = document.getElementById('fnList');
+const statusEl = document.getElementById('status');
+let statusTimer = null;
+
+function status(msg){
+  statusEl.textContent = msg;
+  clearTimeout(statusTimer);
+  if (msg === 'done') statusTimer = setTimeout(() => { statusEl.textContent = ''; }, 1200);
+}
+
+function addFunction(expr, color, silent){
+  const f = {
+    id: ++seq,
+    label: nextLabel(),
+    expr: expr || '',
+    color: color || PALETTE[(seq - 1) % PALETTE.length],
+    visible: true,
+    alpha: 1,          // eased 0..1, so hiding fades instead of snapping
+    fn: null,
+    ast: null,
+    error: '',
+    progress: 0,
+  };
+  funcs.push(f);
+  if (expr) retype(f, expr, true);
+  if (!silent) renderList();
+  return f;
+}
+
+// NOTE: `quiet` must be true when called from a keystroke handler. Rebuilding
+// the list destroys the very <input> being typed into, which drops focus and
+// kills the caret mid-word — so typing only ever touches the text nodes.
+function retype(f, text, quiet){
+  f.expr = text;
+  const r = compile(text);
+  f.fn = r.fn;
+  f.error = r.error;
+  f.ast = r.ast;
+  f.progress = 0;          // an edited expression has to be traced again
+  tracing = false;
+  if (!quiet) renderList();
+}
+
+function renderList(){
+  fnList.innerHTML = '';
+  for (const f of funcs){
+    const row = document.createElement('div');
+    row.className = 'fnrow' + (f.visible ? '' : ' off');
+
+    const top = document.createElement('div');
+    top.className = 'fntop';
+
+    const clr = document.createElement('input');
+    clr.type = 'color';
+    clr.value = f.color;
+    clr.title = 'colour';
+    clr.addEventListener('input', () => { f.color = clr.value; });
+
+    const lbl = document.createElement('select');
+    lbl.className = 'lbl';
+    lbl.title = 'label for this curve';
+    for (const L of LABEL_POOL){
+      const o = document.createElement('option');
+      o.value = L; o.textContent = L;
+      lbl.appendChild(o);
+    }
+    lbl.value = f.label;
+    lbl.addEventListener('change', () => { f.label = lbl.value; });
+
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.className = 'expr' + (f.error ? ' warn' : '');
+    inp.value = f.expr;
+    inp.spellcheck = false;
+    inp.placeholder = 'e.g. sin(x)';
+
+    // Typeset view of the same expression. The row shows either the editable
+    // text or the typeset maths, never both — like Desmos.
+    const mathBox = document.createElement('div');
+    mathBox.className = 'm-math';
+    mathBox.title = 'click to edit';
+    mathBox.tabIndex = 0;                 // keyboard reachable
+    mathBox.setAttribute('role', 'button');
+
+    const field = document.createElement('div');
+    field.className = 'fnfield';
+    field.append(inp, mathBox);
+
+    function showMath(){
+      mathBox.innerHTML = '';
+      const show = f.ast && !f.error && f.expr.trim();
+      if (show){
+        try { mathBox.append(renderMath(f.ast)); }
+        catch (_) { field.classList.remove('view'); return; }
+      }
+      field.classList.toggle('view', !!show);
+    }
+
+    // Quiet re-type: this handler must never rebuild the list, or the input
+    // being typed into would be replaced and lose the caret on every keypress.
+    inp.addEventListener('input', () => {
+      retype(f, inp.value, true);
+      inp.className = 'expr' + (f.error ? ' warn' : '');
+      errEl.textContent = f.error;
+    });
+    inp.addEventListener('keydown', e => {
+      if (e.key === 'Enter'){ e.preventDefault(); run(); }   // keeps focus
+    });
+    inp.addEventListener('focus', () => field.classList.remove('view'));
+    inp.addEventListener('blur',  () => showMath());
+    mathBox.addEventListener('mousedown', e => {
+      e.preventDefault();                 // don't let the browser move focus
+      field.classList.remove('view');
+      inp.focus();
+    });
+    mathBox.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' '){
+        e.preventDefault();
+        field.classList.remove('view');
+        inp.focus();
+      }
+    });
+
+    const vis = document.createElement('input');
+    vis.type = 'checkbox';
+    vis.className = 'tick';
+    vis.checked = f.visible;
+    vis.title = 'show / hide';
+    vis.addEventListener('change', () => {
+      f.visible = vis.checked;
+      row.className = 'fnrow' + (f.visible ? '' : ' off');
+    });
+
+    const del = document.createElement('button');
+    del.className = 'del';
+    del.textContent = '\u00d7';
+    del.title = 'delete';
+    del.addEventListener('click', () => {
+      funcs = funcs.filter(g => g !== f);
+      renderList();
+    });
+
+    top.append(clr, lbl, field, vis, del);
+
+    const errEl = document.createElement('div');
+    errEl.className = 'fnerr';
+    errEl.textContent = f.error;
+
+    row.append(top, errEl);
+    showMath();                    // typeset view unless the field is being edited
+    fnList.appendChild(row);
+  }
+}
+
+/* ---- collapsible sections ---- */
+for (const h of document.querySelectorAll('.sect > h2.hdr')){
+  h.addEventListener('click', () => {
+    const sect = h.parentElement;
+    sect.classList.toggle('collapsed');
+    const chev = h.querySelector('.chev');
+    const open = !sect.classList.contains('collapsed');
+    chev.innerHTML = open ? '&#9660;' : '&#9654;';
+  });
+}
+
+/* ---- option wiring ---- */
+function bindOpt(id, key){
+  const el = document.getElementById(id);
+  el.checked = opts[key];
+  el.addEventListener('change', () => { opts[key] = el.checked; });
+}
+bindOpt('optAxes', 'axes');
+bindOpt('optGrid', 'grid');
+bindOpt('optLabels', 'labels');
+bindOpt('optReadout', 'readout');
+bindOpt('optTip', 'tip');
+
+const speedEl = document.getElementById('optSpeed');
+const speedV  = document.getElementById('optSpeedV');
+speedEl.addEventListener('input', () => {
+  speedMul = parseFloat(speedEl.value);
+  speedV.textContent = speedMul + '\u00d7';
+});
+
+document.getElementById('add').addEventListener('click', () => {
+  const f = addFunction('', null);
+  renderList();
+  const inputs = fnList.querySelectorAll('input.expr');
+  if (inputs.length) inputs[inputs.length - 1].focus();
+});
+
+document.getElementById('run').addEventListener('click', run);
+
+document.getElementById('retrace').addEventListener('click', () => {
+  for (const f of funcs) f.progress = 0;
+  run();
+});
+
+document.getElementById('clearAll').addEventListener('click', () => {
+  funcs = [];
+  tracing = false;
+  renderList();
+  status('cleared');
+});
+
+document.getElementById('reset').addEventListener('click', () => {
+  view.cx = 0; view.cy = 0; view.scale = 52;
+  mouse.x = mouse.y = null;
+});
+
+/* ---- pointer ---- */
+let pan = null;
+
+canvas.addEventListener('pointerdown', e => {
+  try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+  pan = { sx:e.clientX, sy:e.clientY, cx:view.cx, cy:view.cy };
+});
+canvas.addEventListener('pointermove', e => {
+  const r = canvas.getBoundingClientRect();
+  mouse.x = e.clientX - r.left;
+  mouse.y = e.clientY - r.top;
+  if (pan){
+    view.cx = pan.cx - (e.clientX - pan.sx) / view.scale;
+    view.cy = pan.cy + (e.clientY - pan.sy) / view.scale;
+  }
+});
+canvas.addEventListener('pointerup', () => { pan = null; });
+canvas.addEventListener('pointercancel', () => { pan = null; });
+canvas.addEventListener('pointerleave', () => { mouse.x = mouse.y = null; });
+
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const r = canvas.getBoundingClientRect();
+  const sx = e.clientX - r.left, sy = e.clientY - r.top;
+  const before = { x:invX(sx), y:invY(sy) };
+  const k = Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0016));
+  view.scale = Math.max(1e-4, Math.min(1e7, view.scale * k));
+  view.cx += before.x - invX(sx);
+  view.cy += before.y - invY(sy);
+}, { passive:false });
+
+/* ---- sidebar collapse ---- */
+const sideToggle = document.getElementById('sideToggle');
+function toggleSide(){
+  const hidden = document.body.classList.toggle('side-collapsed');
+  try { localStorage.setItem('fp.sideHidden', hidden ? '1' : '0'); } catch (_) {}
+}
+sideToggle.addEventListener('click', toggleSide);
+try {
+  if (localStorage.getItem('fp.sideHidden') === '1') document.body.classList.add('side-collapsed');
+} catch (_) {}
+
+window.addEventListener('keydown', e => {
+  // don't hijack keys while the user is typing an expression
+  if (e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
+  if (e.key === '0') document.getElementById('reset').click();
+  else if (e.key === 'b' || e.key === 'B') toggleSide();
+});
+
+// The canvas must follow the sidebar as it animates, not just on window resize.
+// ResizeObserver fires after layout but BEFORE paint, so repainting here means
+// the frame the browser paints is always the freshly-sized one — no blank frame.
+if (window.ResizeObserver){
+  new ResizeObserver(() => { resize(); render(); }).observe(stage);
+}
+window.addEventListener('resize', () => { resize(); render(); });
+
+/* =====================================================================
+   LOOP + BOOT
+   ===================================================================== */
+
+let last = performance.now();
+const hud = document.getElementById('hud');
+
+function frame(now){
+  const dt = Math.min(0.1, (now - last) / 1000);
+  last = now;
+
+  tick(dt);
+  render();
+
+  hud.textContent = 'x \u2208 [' + xmin().toFixed(2) + ', ' + xmax().toFixed(2) + ']' +
+                    '  \u00b7  zoom ' + view.scale.toFixed(2) + ' px/unit';
+  requestAnimationFrame(frame);
+}
+
+resize();
+addFunction('sin(x)', PALETTE[0]);
+addFunction('x^2/4 - 2', PALETTE[1]);
+renderList();
+render();
+status('press Run to trace');
+requestAnimationFrame(frame);
+
+// console handle — note `funcs` is a getter: the module rebinds the array on
+// "Clear all" / delete, so a captured reference would go stale.
+window.PLOT = {
+  get funcs(){ return funcs; },
+  view, compile, run, opts, render,
+  get tracing(){ return tracing; },
+};
+
+})();
+</script>
+</body>
+</html>
